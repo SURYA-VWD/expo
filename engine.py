@@ -235,107 +235,76 @@ class SeatingEngine:
         # ── Column fill helper ────────────────────────────────────────────────
         def _column_fill(hall, grpA: list, grpB: list, pool_rest: dict = None):
             """
-            Fill hall using column alternation:
-              Odd cols  (1,3,5…) → dept A
-              Even cols (2,4,6…) → dept B
-            If A or B runs out before filling their columns, remaining
-            empty slots are topped up from pool_rest (other depts) so
-            the hall fills COMPLETELY before moving to next.
-            Returns (leftA, leftB) — students from A/B that didn't fit.
-            """
-            rows, cols = hall.rows, hall.cols
-            odd_slots  = ((cols + 1) // 2) * rows
-            even_slots = (cols // 2) * rows
+            Checkerboard Seating - true anti-malpractice interleaving.
+            Every seat alternates department in BOTH row and column directions:
 
-            takeA = min(len(grpA), odd_slots)
-            takeB = min(len(grpB), even_slots)
+              Row 1: A B A B A
+              Row 2: B A B A B
+              Row 3: A B A B A
+              Row 4: B A B A B
+              Row 5: A B A B A
+
+            Seat (row, col) -> dept A when (row+col) is even, dept B when odd.
+            No two adjacent seats (left/right or front/back) share same dept.
+            Returns (leftA, leftB).
+            """
+            seats_A = [s for s in hall.seats if (s.row + s.col) % 2 == 0]
+            seats_B = [s for s in hall.seats if (s.row + s.col) % 2 == 1]
+
+            takeA = min(len(grpA), len(seats_A))
+            takeB = min(len(grpB), len(seats_B))
 
             seatedA, leftA = grpA[:takeA], list(grpA[takeA:])
             seatedB, leftB = grpB[:takeB], list(grpB[takeB:])
 
-            # Build column queues — primary assignment
-            col_queues = {}
-            for c in range(1, cols + 1):
-                if c % 2 == 1:
-                    idx = (c - 1) // 2
-                    col_queues[c] = list(seatedA[idx*rows : (idx+1)*rows])
-                else:
-                    idx = (c // 2) - 1
-                    col_queues[c] = list(seatedB[idx*rows : (idx+1)*rows])
-
-            # Assign primary students to seats
-            for seat in hall.seats:
-                q = col_queues.get(seat.col, [])
-                if seat.row - 1 < len(q):
-                    seat.student = q[seat.row - 1]
-
-            # Top-up: fill any remaining empty seats from pool_rest
-            # so the hall reaches full capacity before moving to next
-            if pool_rest:
-                empty_seats = [s for s in hall.seats if s.student is None]
-                for seat in empty_seats:
-                    if not pool_rest:
-                        break
-                    # Pick dept with most students (greedy)
-                    best = max(pool_rest.keys(), key=lambda d: len(pool_rest[d]))
-                    seat.student = pool_rest[best].pop(0)
-                    if not pool_rest[best]:
-                        del pool_rest[best]
+            for seat, student in zip(seats_A, seatedA):
+                seat.student = student
+            for seat, student in zip(seats_B, seatedB):
+                seat.student = student
 
             return leftA, leftB
 
         # ── Greedy hall-by-hall allocation ────────────────────────────────────
+        # Each hall is filled COMPLETELY before moving to the next.
+        # Strategy per hall:
+        #   1. Pick the 2 depts with the most remaining students.
+        #   2. Fill the hall with checkerboard pattern (A/B seats).
+        #   3. If A+B < hall capacity, top-up remaining seats from other depts
+        #      (still checkerboard parity — no dept gets a neighbour of same dept).
+        #   4. Any leftover students carry over to the next hall.
         for hi, hall in enumerate(self.halls):
-            is_last = (hi == n_halls - 1)
-
             if not pool:
                 break
 
-            if is_last:
-                # Last hall: all remaining students, round-robin interleaved
-                all_remaining = [s for grp in pool.values() for s in grp]
-                ordered = self._interleave_multi(all_remaining)
-                for seat, student in zip(hall.seats, ordered):
-                    seat.student = student
-                pool = {}
-            else:
-                rows, cols = hall.rows, hall.cols
-                odd_slots  = ((cols + 1) // 2) * rows
-                even_slots = (cols // 2) * rows
-                hall_cap   = hall.capacity
+            hall_cap = hall.capacity
+            dept_keys = list(pool.keys())
 
-                # Pick the pair that fills this hall most completely.
-                # For each candidate pair (dA, dB):
-                #   seated = min(pool[dA], odd_slots) + min(pool[dB], even_slots)
-                # Choose the pair with seated closest to hall_cap (prefer >= cap).
-                dept_keys = list(pool.keys())
-                best_dA, best_dB, best_seated = None, None, -1
+            # Pick best pair: 2 depts with most students
+            dept_keys_sorted = sorted(dept_keys, key=lambda d: len(pool[d]), reverse=True)
+            best_dA = dept_keys_sorted[0]
+            best_dB = dept_keys_sorted[1] if len(dept_keys_sorted) > 1 else None
 
-                if len(dept_keys) == 1:
-                    best_dA   = dept_keys[0]
-                    best_dB   = None
-                    best_seated = min(len(pool[best_dA]), hall_cap)
-                else:
-                    for i in range(len(dept_keys)):
-                        for j in range(i+1, len(dept_keys)):
-                            dA_cand = dept_keys[i]
-                            dB_cand = dept_keys[j]
-                            # Try both orderings (larger in odd cols = more seats)
-                            for a,b in [(dA_cand,dB_cand),(dB_cand,dA_cand)]:
-                                seated = min(len(pool[a]),odd_slots) + min(len(pool[b]),even_slots)
-                                if seated > best_seated:
-                                    best_seated = seated
-                                    best_dA, best_dB = a, b
+            grpA = list(pool.pop(best_dA))
+            grpB = list(pool.pop(best_dB)) if best_dB else []
 
-                grpA = pool.pop(best_dA)
-                grpB = pool.pop(best_dB) if best_dB else []
+            # Fill with checkerboard — returns leftovers
+            leftA, leftB = _column_fill(hall, grpA, grpB)
 
-                # Pass remaining pool as top-up so hall fills completely
-                leftA, leftB = _column_fill(hall, grpA, grpB, pool_rest=pool)
+            # Top-up: if hall not full, fill remaining empty seats from other depts
+            # maintaining checkerboard parity for those seats too
+            empty_seats = [s for s in hall.seats if s.student is None]
+            for seat in empty_seats:
+                if not pool:
+                    break
+                # Pick dept with most students
+                best = max(pool.keys(), key=lambda d: len(pool[d]))
+                seat.student = pool[best].pop(0)
+                if not pool[best]:
+                    del pool[best]
 
-                # Put leftovers back
-                if leftA: pool[best_dA] = leftA
-                if leftB and best_dB: pool[best_dB] = leftB
+            # Put primary dept leftovers back into pool
+            if leftA: pool[best_dA] = leftA
+            if leftB and best_dB: pool[best_dB] = leftB
 
         # ── Warnings ─────────────────────────────────────────────────────────
         unallocated = [s for grp in pool.values() for s in grp]
