@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Automated Examination Seating Arrangement System — GCEE</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;600;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  window.DEPT_LIST = {{ dept_list | tojson }};
+  window.SUBJECTS  = {{ subjects  | tojson }};
+</script>
+</head>
+<body>
+
+<!-- ══ TOPBAR ══════════════════════════════════════════════════ -->
+<header id="topbar">
+  <div class="brand">
+  <img src="/static/images/gcelogo.png" class="logo" alt="GCEE Logo">
+
+  <div class="brand-text">
+      <div class="brand-name">GCEE <span>Exam Cell</span></div>
+      <div class="brand-sub">AUTOMATED SEATING SYSTEM</div>
+    </div>
+  </div>
+  <div class="top-mid">
+    <span class="top-tag">Automated Examination Seating Arrangement System</span>
+  </div>
+  <div class="top-right">
+    {% if not has_api_key %}
+    <div class="api-warn">⚠ No API Key — Fallback mode</div>
+    {% endif %}
+    <div class="status-pill">
+      <div class="sdot live" id="sdot"></div>
+      <span id="stext">READY</span>
+    </div>
+    <div class="top-sep"></div>
+    <button class="tbtn" id="btn-xlsx" onclick="doExport('excel')" style="display:none">⬇ XLSX</button>
+    <button class="tbtn" id="btn-csv"  onclick="doExport('csv')"   style="display:none">⬇ CSV</button>
+    <button class="tbtn" id="btn-clr"  onclick="clearAll()"        style="display:none">✕ CLEAR</button>
+  </div>
+</header>
+
+<!-- ══ MODE TABS ════════════════════════════════════════════════ -->
+<div id="mode-tabs">
+  <button class="mtab on" data-mode="ai" onclick="switchMode('ai')">
+    <span class="mtab-icon">✦</span> AI Chat Mode
+  </button>
+  <button class="mtab" data-mode="manual" onclick="switchMode('manual')">
+    <span class="mtab-icon">⊞</span> Manual Entry
+  </button>
+</div>
+
+<!-- ══ MAIN LAYOUT ══════════════════════════════════════════════ -->
+<div id="layout">
+
+  <!-- ════ LEFT: Seating View ════ -->
+  <section id="view-panel">
+    <div class="pbar">
+      <span class="plabel">Seating Arrangement</span>
+      <div class="pbar-right">
+        <div class="vtoggle">
+          <button class="vbtn active" data-view="grid" onclick="setView('grid')">GRID</button>
+          <button class="vbtn"        data-view="list" onclick="setView('list')">LIST</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stats-strip" class="hidden">
+      <div class="stat"><div class="stat-v" id="sv-total">0</div><div class="stat-l">Students</div></div>
+      <div class="stat"><div class="stat-v" id="sv-halls">0</div><div class="stat-l">Halls Used</div></div>
+      <div class="stat"><div class="stat-v" id="sv-depts">0</div><div class="stat-l">Departments</div></div>
+      <div class="stat"><div class="stat-v" id="sv-pct">0%</div><div class="stat-l">Utilized</div></div>
+    </div>
+
+    <div id="util-strip" class="hidden"></div>
+    <div id="hall-nav" class="hidden"><div id="htabs" class="htabs-row"></div></div>
+
+    <div id="seating-body">
+      <div id="empty-state">
+        <div class="es-icon">🏛</div>
+        <div class="es-title">Awaiting Input</div>
+        <div class="es-desc">
+          Use <strong>AI Chat</strong> to describe your exam setup in plain English,<br>
+          or switch to <strong>Manual Entry</strong> to configure halls and students directly.<br><br>
+          The system enforces: <strong>max 2 departments per hall</strong> · students from any semester can share a hall · anti-malpractice A-B-A-B interleaving · overflow into last hall if needed.
+        </div>
+        <div class="es-examples">
+          <div class="eg-label">Quick examples (AI Chat) →</div>
+          <div class="chips">
+            <button class="chip" onclick="switchMode('ai');fillAndSend('3 halls, CSE 20 students, ECE 18, MECH 15, CIVIL 12')">3 halls · 4 depts · 65 students</button>
+            <button class="chip" onclick="switchMode('ai');fillAndSend('2 halls, 5 departments, 60 students, semester 3')">5 depts · 60 students</button>
+            <button class="chip" onclick="switchMode('ai');fillAndSend('4 halls, EEE 22, IT 18, MBA 16, MCA 14, CSE 20')">5 depts · 4 halls · 90 students</button>
+            <button class="chip" onclick="switchMode('manual')">Switch to Manual Entry →</button>
+          </div>
+        </div>
+      </div>
+      <div id="hall-view" class="hidden"></div>
+    </div>
+  </section>
+
+  <!-- ════ RIGHT: Input Panel ════ -->
+  <aside id="input-panel">
+    <div class="ipanel-bar">
+      <div class="ipanel-icon" id="ipanel-icon">AI</div>
+      <div class="chat-info">
+        <div class="chat-title" id="ipanel-title">AI Seating Assistant</div>
+        <div class="chat-sub"   id="ipanel-sub">Natural Language Engine</div>
+      </div>
+    </div>
+
+    <!-- ── AI CHAT VIEW ── -->
+    <div id="chat-view" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0;">
+      <div id="messages" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;min-height:0;">
+        <div class="sys-msg">── SESSION INITIALIZED ──</div>
+        <div class="msg ai">
+          <div class="mavatar">AI</div>
+          <div class="mbubble">
+            System ready. I'm the GCEE Exam Cell seating AI.<br><br>
+            Describe your exam setup in plain English and I'll generate a complete anti-malpractice arrangement with ≥2 departments per hall, interleaved seats, and export options.<br><br>
+            <em class="hint">Example: "3 halls, CSE 20 students, ECE 18, MECH 15, CIVIL 12"</em>
+          </div>
+        </div>
+      </div>
+      <div style="padding:12px 14px;border-top:var(--bd-2);background:var(--bg-2);flex-shrink:0;">
+        <div class="quick-btns">
+          <button class="qbtn" onclick="fillAndSend('Generate sample for 5 departments 60 students 3 halls')">SAMPLE</button>
+          <button class="qbtn" onclick="fillAndSend('Add one more hall')">+ HALL</button>
+          <button class="qbtn" onclick="doReshuffle()">RESHUFFLE</button>
+          <button class="qbtn" onclick="fillAndSend('Show department wise student count')">STATS</button>
+        </div>
+        <div class="irow">
+          <textarea id="chat-input" rows="1" placeholder="Describe exam setup…" onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+          <button id="send-btn" onclick="sendMessage()" title="Send (Enter)">➤</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MANUAL ENTRY VIEW ── -->
+    <div id="manual-view" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0;">
+
+      <!-- entry mode tabs -->
+      <div id="input-tabs">
+        <button class="itab on" data-itab="bulk"       onclick="switchItab('bulk')">Dept Bulk</button>
+        <button class="itab"    data-itab="individual" onclick="switchItab('individual')">Individual Students</button>
+      </div>
+
+      <div id="input-body">
+
+        <!-- ─ HALLS SECTION (shared) ─ -->
+        <div class="form-section">
+          <div class="fsec-title"><span>1</span>Examination Halls</div>
+          <div id="halls-list"></div>
+          <div style="font-family:var(--fm);font-size:9px;color:var(--t-40);text-align:center;margin-bottom:10px" id="hall-count-label">No halls added</div>
+          <div class="add-hall-form">
+            <div class="fgrow">
+              <div class="fg">
+                <label>Hall Name</label>
+                <input type="text" id="new-hall-name" placeholder="Auto-named if blank">
+              </div>
+              <div class="fg">
+                <label>Capacity <span style="font-size:9px;opacity:.7">(auto)</span></label>
+                <input type="number" id="new-hall-cap" value="25" min="1" max="200" readonly style="background:var(--s4);cursor:not-allowed;color:var(--w100);font-weight:700" title="Auto-calculated: Rows × Columns">
+              </div>
+            </div>
+            <div class="fgrow">
+              <div class="fg">
+                <label>Rows</label>
+                <input type="number" id="new-hall-rows" value="5" min="1" max="20" oninput="syncCapacity()" onchange="syncCapacity()">
+              </div>
+              <div class="fg">
+                <label>Columns</label>
+                <input type="number" id="new-hall-cols" value="5" min="1" max="20" oninput="syncCapacity()" onchange="syncCapacity()">
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="addHall()" style="width:100%;margin-top:4px;justify-content:center">+ Add Hall</button>
+          </div>
+        </div>
+
+        <!-- ─ BULK DEPT VIEW ─ -->
+        <div id="bulk-view">
+          <div class="form-section">
+            <div class="fsec-title"><span>2</span>Departments &amp; Student Counts</div>
+
+            <div class="two-dept-rule">
+              ⚡ Max 2 departments per hall — students are interleaved A-B-A-B. Overflow goes to last hall.
+            </div>
+
+            <!-- upload zone for dept bulk -->
+            <div class="upload-zone" id="dept-upload-zone" ondragover="onDragOver(event,'dept-upload-zone')" ondragleave="onDragLeave('dept-upload-zone')" ondrop="onDrop(event,'departments')">
+              <div class="upload-icon">⬆</div>
+              <div class="upload-text">Upload CSV / Excel file</div>
+              <div class="upload-hint">Drag &amp; drop or click to browse</div>
+              <input type="file" id="dept-file-input" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleFileUpload(this,'departments')">
+              <div class="upload-actions">
+                <button class="btn btn-sm" onclick="$('dept-file-input').click()">Browse File</button>
+                <a class="btn btn-sm" href="/api/template/departments" download>⬇ Sample CSV</a>
+              </div>
+            </div>
+
+            <!-- upload status -->
+            <div id="dept-upload-status" class="upload-status hidden"></div>
+
+            <div class="upload-divider"><span>or enter manually below</span></div>
+
+            <div id="dept-rows"></div>
+            <div class="btn-row">
+              <button class="btn btn-sm" onclick="addDeptRow()">+ Add Row</button>
+              <button class="btn btn-sm" onclick="clearDeptRows()">Clear All</button>
+            </div>
+          </div>
+          <div class="form-section" style="border-bottom:none">
+            <button class="btn btn-primary" id="submit-bulk-btn" onclick="submitBulk()" style="width:100%;justify-content:center;padding:12px">
+              ⚡ Generate Seating Arrangement
+            </button>
+            <div style="margin-top:8px">
+              <button class="btn btn-sm" onclick="doReshuffle()" style="width:100%;justify-content:center">🔀 Reshuffle Current</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─ INDIVIDUAL STUDENTS VIEW ─ -->
+        <div id="individual-view" class="hidden">
+          <div class="form-section">
+            <div class="fsec-title"><span>2</span>Student Details</div>
+
+            <!-- upload zone for students -->
+            <div class="upload-zone" id="stu-upload-zone" ondragover="onDragOver(event,'stu-upload-zone')" ondragleave="onDragLeave('stu-upload-zone')" ondrop="onDrop(event,'students')">
+              <div class="upload-icon">⬆</div>
+              <div class="upload-text">Upload CSV / Excel file</div>
+              <div class="upload-hint">Drag &amp; drop or click to browse</div>
+              <input type="file" id="stu-file-input" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleFileUpload(this,'students')">
+              <div class="upload-actions">
+                <button class="btn btn-sm" onclick="$('stu-file-input').click()">Browse File</button>
+                <a class="btn btn-sm" href="/api/template/students" download>⬇ Sample CSV</a>
+              </div>
+            </div>
+
+            <!-- upload status -->
+            <div id="stu-upload-status" class="upload-status hidden"></div>
+
+            <div class="upload-divider"><span>or enter manually below</span></div>
+
+            <div id="student-tbl-wrap">
+              <table id="student-tbl">
+                <thead>
+                  <tr>
+                    <th>Register No</th><th>Name</th><th>Dept</th>
+                    <th>Subject</th><th>Sem</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="student-tbody"></tbody>
+              </table>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-sm" onclick="addStudentRow()">+ Add Row</button>
+              <button class="btn btn-sm" onclick="addMultipleRows()">+ Bulk Add</button>
+              <button class="btn btn-sm" onclick="clearStudents()">Clear All</button>
+            </div>
+          </div>
+          <div class="form-section" style="border-bottom:none">
+            <button class="btn btn-primary" id="submit-ind-btn" onclick="submitIndividual()" style="width:100%;justify-content:center;padding:12px">
+              ⚡ Generate Seating Arrangement
+            </button>
+            <div style="margin-top:8px">
+              <button class="btn btn-sm" onclick="doReshuffle()" style="width:100%;justify-content:center">🔀 Reshuffle Current</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- end input-body -->
+    </div><!-- end manual-view -->
+
+  </aside>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
